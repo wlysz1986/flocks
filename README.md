@@ -24,12 +24,12 @@ Flocks is an AI-driven SecOps platform built with Python, featuring multi-agent 
 
 Flocks supports two deployment methods:
 
-- `Option 1: Host Installation` (recommended)
+- `Option 1: PC Installation` (recommended)
 - `Option 2: Docker Installation`
 
 Choose one method below.
 
-## Option 1: Host Installation
+## Option 1: PC Installation
 
 ### System Requirements
 
@@ -42,7 +42,7 @@ By default, the project install scripts will try to ensure the requirements abov
 
 If automatic `npm` installation fails during setup, please install `npm` manually and use version `22.+` or newer.
 
-### Install flocks
+### Install with one command
 
 > **Users in mainland China**: If GitHub or `raw.githubusercontent.com` is slow or unreachable, clone from a Gitee mirror and follow the Source install instructions below.
 
@@ -68,7 +68,7 @@ iwr -useb https://raw.githubusercontent.com/AgentFlocks/Flocks/main/install.ps1 
 & ([scriptblock]::Create((iwr -useb https://raw.githubusercontent.com/AgentFlocks/Flocks/main/install.ps1))) -InstallTui
 ```
 
-#### Source install
+#### Install from source code
 
 If you prefer to inspect the repository before installation, clone it locally and run the installer from the workspace:
 
