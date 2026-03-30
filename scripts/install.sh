@@ -152,6 +152,20 @@ show_path_update_hint() {
   fi
 }
 
+show_path_update_hint_inline() {
+  [[ "$PATH_REFRESH_HINT_REQUIRED" -eq 1 ]] || return 0
+
+  local rc_file
+  if [[ -n "$PATH_UPDATE_FILES" ]]; then
+    printf '请执行以下命令刷新当前终端，或直接重新打开一个新终端：\n'
+    while IFS= read -r rc_file; do
+      [[ -z "$rc_file" ]] && continue
+      printf '  source "%s"\n' "$rc_file"
+    done <<< "$PATH_UPDATE_FILES"
+    printf '\n'
+  fi
+}
+
 is_repo_root() {
   local dir="$1"
   [[ -n "$dir" ]] \
@@ -629,31 +643,24 @@ main() {
 
 [flocks] 安装完成。
 
+$(show_path_update_hint_inline)
+
 后续可用命令：
   1. 以 daemon 模式启动后端 + WebUI
      flocks start
 
-  2. 查看服务状态
-     flocks status
-
-  3. 查看日志
-     flocks logs
-
+  2. 查看更多命令帮助
+     flocks --help
 EOF
 
   if [[ "$INSTALL_TUI" -eq 1 ]]; then
     cat <<EOF
-  4. 启动 TUI
+  3. 启动 TUI
      flocks tui
-EOF
-  else
-    cat <<EOF
-  4. 安装 TUI（可选）
-     "$ROOT_DIR/scripts/install.sh" --with-tui
 EOF
   fi
 
-  show_path_update_hint
+  # show_path_update_hint
 }
 
 main "$@"

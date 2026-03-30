@@ -572,19 +572,12 @@ function Main {
     Write-Host "  1. 以 daemon 模式启动后端 + WebUI"
     Write-Host "     flocks start"
     Write-Host ""
-    Write-Host "  2. 查看服务状态"
-    Write-Host "     flocks status"
-    Write-Host ""
-    Write-Host "  3. 查看日志"
-    Write-Host "     flocks logs"
+    Write-Host "  2. 查看更多命令帮助"
+    Write-Host "     flocks --help"
     Write-Host ""
     if ($InstallTui) {
-        Write-Host "  4. 启动 TUI"
+        Write-Host "  3. 启动 TUI"
         Write-Host "     flocks tui"
-    }
-    else {
-        Write-Host "  4. 安装 TUI（可选）"
-        Write-Host "     .\scripts\install.ps1 -InstallTui"
     }
 }
 

@@ -42,8 +42,9 @@ Flocks 支持两种部署方式：
 
 如果安装过程中自动安装 `npm` 失败，请手动安装 `npm`，并使用 `22.+` 或更高版本。
 
-
 ### 安装 Flocks
+
+> **中国大陆用户**：若 GitHub / `raw.githubusercontent.com` 访问不稳定，可从 Gitee 镜像克隆后安装，见下文「源码安装」。
 
 #### macOS / Linux
 
@@ -70,13 +71,17 @@ iwr -useb https://raw.githubusercontent.com/AgentFlocks/Flocks/main/install.ps1 
 克隆到本地后在工作区执行安装脚本：
 
 ```bash
-git clone https://github.com/AgentFlocks/Flocks.git flocks
-# git clone https://gitee.com/flocks/flocks.git flocks # gitee，代替
+git clone https://gitee.com/flocks/flocks.git flocks
 cd flocks
 ```
 
+Macos/Linux
 ```bash
 ./scripts/install.sh # Macos/Linux
+```
+
+Windows powershell
+```bash
 powershell -ep Bypass -File .\scripts\install.ps1 # Windows powershell
 ```
 
@@ -103,12 +108,13 @@ flocks stop
 
 ## 方案 2：Docker 安装
 
-! tips: docker 模式下暂时 agent-browser headed 模式不可用
+> [!NOTE]
+> docker 模式下暂时 agent-browser headed 模式不可用
 
 ### 拉取镜像
 
 ```bash
-docker pull ghcr.io/agentflocks/Flocks:latest
+docker pull ghcr.io/agentflocks/flocks:latest
 ```
 
 ## 启动服务
@@ -123,7 +129,7 @@ docker run -d \
   -p 5173:5173 \
   --shm-size 2gb \
   -v "${HOME}/.flocks:/home/flocks/.flocks" \
-  ghcr.io/agentflocks/Flocks:latest
+  ghcr.io/agentflocks/flocks:latest
 ```
 
 ```powershell
@@ -134,7 +140,7 @@ docker run -d `
   -p 5173:5173 `
   --shm-size 2gb `
   -v "${env:USERPROFILE}\.flocks:/home/flocks/.flocks" `
-  ghcr.io/agentflocks/Flocks:latest
+  ghcr.io/agentflocks/flocks:latest
 ```
 
 默认服务地址：
@@ -158,6 +164,6 @@ url = "https://pypi.org/simple"
 default = true
 ```
 
-## 许可证
+## 开源协议
 
-MIT License
+Apache License 2.0

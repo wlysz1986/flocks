@@ -24,7 +24,7 @@ Flocks is an AI-driven SecOps platform built with Python, featuring multi-agent 
 
 Flocks supports two deployment methods:
 
-- `Option 1: Host Installation`
+- `Option 1: Host Installation` (recommended)
 - `Option 2: Docker Installation`
 
 Choose one method below.
@@ -42,8 +42,9 @@ By default, the project install scripts will try to ensure the requirements abov
 
 If automatic `npm` installation fails during setup, please install `npm` manually and use version `22.+` or newer.
 
-
 ### Install flocks
+
+> **Users in mainland China**: If GitHub or `raw.githubusercontent.com` is slow or unreachable, clone from a Gitee mirror and follow the Source install instructions below.
 
 The recommended host installation entrypoint is the GitHub bootstrap installer. It downloads the repository source archive to a temporary directory, copies it into a persistent local install directory, then installs backend and WebUI dependencies and exposes the `flocks` CLI on your PATH.
 
@@ -67,20 +68,27 @@ iwr -useb https://raw.githubusercontent.com/AgentFlocks/Flocks/main/install.ps1 
 & ([scriptblock]::Create((iwr -useb https://raw.githubusercontent.com/AgentFlocks/Flocks/main/install.ps1))) -InstallTui
 ```
 
-#### Source install (for development or debugging)
+#### Source install
 
 If you prefer to inspect the repository before installation, clone it locally and run the installer from the workspace:
 
 ```bash
 git clone https://github.com/AgentFlocks/Flocks.git flocks
+
+# Alternative for users in China (Gitee mirror)
+# git clone https://gitee.com/flocks/flocks.git flocks
+
 cd flocks
-./scripts/install.sh
 ```
 
-```powershell
-git clone https://github.com/AgentFlocks/Flocks.git flocks
-cd flocks
-powershell -ep Bypass -File .\scripts\install.ps1
+Macos/Linux
+```bash
+./scripts/install.sh # Macos/Linux
+```
+
+Windows powershell
+```bash
+powershell -ep Bypass -File .\scripts\install.ps1 # Windows powershell
 ```
 
 ### Start service
@@ -106,10 +114,13 @@ Flocks cli useage:  `flocks --help`
 
 ## Option 2: Docker Installation
 
+> [!NOTE]
+> docker 模式下暂时 agent-browser headed 模式不可用
+
 ### Pull image
 
 ```bash
-docker pull ghcr.io/agentflocks/Flocks:latest
+docker pull ghcr.io/agentflocks/flocks:latest
 ```
 
 ## Start service
@@ -124,7 +135,7 @@ docker run -d \
   -p 5173:5173 \
   --shm-size 2gb \
   -v "${HOME}/.flocks:/home/flocks/.flocks" \
-  ghcr.io/agentflocks/Flocks:latest
+  ghcr.io/agentflocks/flocks:latest
 ```
 
 ```powershell
@@ -135,7 +146,7 @@ docker run -d `
   -p 5173:5173 `
   --shm-size 2gb `
   -v "${env:USERPROFILE}\.flocks:/home/flocks/.flocks" `
-  ghcr.io/agentflocks/Flocks:latest
+  ghcr.io/agentflocks/flocks:latest
 ```
 
 `EXPOSE` in the image only documents container ports. You still need `-p 8000:8000 -p 5173:5173` to access the service from the host browser.
@@ -159,4 +170,4 @@ default = true
 
 ## License
 
-MIT License
+Apache License 2.0
