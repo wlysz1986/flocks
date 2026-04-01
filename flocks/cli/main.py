@@ -224,7 +224,7 @@ def stop():
     Stop backend and WebUI
     """
     try:
-        stop_all(console)
+        stop_all(_service_config(), console)
     except ServiceError as error:
         _handle_service_error(error)
 
@@ -267,7 +267,7 @@ def status():
     Show backend and WebUI status
     """
     try:
-        show_status(console)
+        show_status(_service_config(), console)
     except ServiceError as error:
         _handle_service_error(error)
 

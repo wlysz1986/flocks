@@ -64,8 +64,10 @@ class SessionStats:
     date_range_latest: int = 0
     days: int = 0
     cost_per_day: float = 0.0
+    tokens_per_day: float = 0.0
     tokens_per_session: float = 0.0
     median_tokens_per_session: float = 0.0
+    has_reasoning_tokens: bool = False
 
 
 def _format_number(num: int) -> str:
@@ -174,6 +176,8 @@ async def _aggregate_stats(
                     session_tokens.reasoning += tokens.reasoning
                     session_tokens.cache_read += cache_read
                     session_tokens.cache_write += cache_write
+                    if tokens.reasoning > 0:
+                        stats.has_reasoning_tokens = True
                     
                     if provider_id and model_id:
                         model_key = f"{provider_id}/{model_id}"
@@ -193,7 +197,8 @@ async def _aggregate_stats(
         stats.total_tokens.cache_read += session_tokens.cache_read
         stats.total_tokens.cache_write += session_tokens.cache_write
         
-        session_total_tokens.append(session_tokens.total)
+        if session_tokens.total > 0:
+            session_total_tokens.append(session_tokens.total)
         
         # Update time range
         session_time = session.time.updated if cutoff_time > 0 else session.time.created
@@ -209,6 +214,7 @@ async def _aggregate_stats(
     
     if stats.days > 0:
         stats.cost_per_day = stats.total_cost / stats.days
+        stats.tokens_per_day = stats.total_tokens.total / stats.days
     
     if stats.total_sessions > 0:
         stats.tokens_per_session = stats.total_tokens.total / stats.total_sessions
@@ -243,22 +249,23 @@ def _display_stats(
     console.print("└" + "─" * width + "┘")
     console.print()
     
-    # Cost & Tokens section
+    # Tokens section
     console.print("┌" + "─" * width + "┐")
-    console.print("│" + "COST & TOKENS".center(width) + "│")
+    console.print("│" + "TOKENS".center(width) + "│")
     console.print("├" + "─" * width + "┤")
     
-    cost = 0 if stats.total_cost != stats.total_cost else stats.total_cost  # Handle NaN
-    cost_per_day = 0 if stats.cost_per_day != stats.cost_per_day else stats.cost_per_day
+    total_tokens = 0 if stats.total_tokens.total != stats.total_tokens.total else stats.total_tokens.total
+    tokens_per_day = 0 if stats.tokens_per_day != stats.tokens_per_day else stats.tokens_per_day
     tokens_per_session = 0 if stats.tokens_per_session != stats.tokens_per_session else stats.tokens_per_session
     median_tokens = 0 if stats.median_tokens_per_session != stats.median_tokens_per_session else stats.median_tokens_per_session
-    
-    console.print(_render_row("Total Cost", f"${cost:.2f}", width + 2))
-    console.print(_render_row("Avg Cost/Day", f"${cost_per_day:.2f}", width + 2))
+    console.print(_render_row("Total Tokens", _format_number(int(total_tokens)), width + 2))
+    console.print(_render_row("Avg Tokens/Day", _format_number(int(tokens_per_day)), width + 2))
     console.print(_render_row("Avg Tokens/Session", _format_number(int(tokens_per_session)), width + 2))
-    console.print(_render_row("Median Tokens/Session", _format_number(int(median_tokens)), width + 2))
+    console.print(_render_row("Median Tokens/Active Session", _format_number(int(median_tokens)), width + 2))
     console.print(_render_row("Input", _format_number(stats.total_tokens.input), width + 2))
     console.print(_render_row("Output", _format_number(stats.total_tokens.output), width + 2))
+    if stats.total_tokens.reasoning > 0:
+        console.print(_render_row("Reasoning", _format_number(stats.total_tokens.reasoning), width + 2))
     console.print(_render_row("Cache Read", _format_number(stats.total_tokens.cache_read), width + 2))
     console.print(_render_row("Cache Write", _format_number(stats.total_tokens.cache_write), width + 2))
     console.print("└" + "─" * width + "┘")
@@ -331,9 +338,9 @@ def show_stats(
         None, "-d", "--days",
         help="Show stats for the last N days (default: all time). Use 0 for today."
     ),
-    tools: Optional[int] = typer.Option(
-        None, "-t", "--tools",
-        help="Number of tools to show (default: all)"
+    tools: int = typer.Option(
+        5, "-t", "--tools",
+        help="Number of tools to show (default: top 5; use 0 for all)"
     ),
     models: Optional[int] = typer.Option(
         None, "-m", "--models",

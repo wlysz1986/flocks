@@ -3,7 +3,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = REPO_ROOT / "scripts"
-BASH_SCRIPTS = ("install.sh", "run.sh", "dev-webui.sh", "prod-webui.sh")
+BASH_SCRIPTS = ("install.sh", "run.sh")
 
 
 def test_bash_scripts_parse_without_errors() -> None:

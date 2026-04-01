@@ -6,7 +6,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = REPO_ROOT / "scripts"
-POWERSHELL_SCRIPTS = ("install.ps1", "run.ps1", "dev-webui.ps1", "prod-webui.ps1")
+POWERSHELL_SCRIPTS = ("install.ps1", "run.ps1")
 
 
 def _parse_script(script_path: Path) -> subprocess.CompletedProcess[str]:

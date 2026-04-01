@@ -997,7 +997,7 @@ def _build_restart_argv() -> list[str]:
 
 def _find_executable(name: str) -> str | None:
     found = shutil.which(name)
-    if found and not found.startswith("/mnt/"):
+    if found:
         return found
     repo_root = _get_repo_root()
     venv_candidates = [

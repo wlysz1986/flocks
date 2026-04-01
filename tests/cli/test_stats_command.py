@@ -91,6 +91,41 @@ def _build_messages(session_id: str) -> list[MessageWithParts]:
     ]
 
 
+def _build_zero_token_messages(session_id: str) -> list[MessageWithParts]:
+    user = UserMessageInfo(
+        id=f"{session_id}_user_zero",
+        sessionID=session_id,
+        role="user",
+        time={"created": 2_000},
+        agent="rex",
+        model={"providerID": "anthropic", "modelID": "claude-sonnet"},
+    )
+    assistant = AssistantMessageInfo(
+        id=f"{session_id}_assistant_zero",
+        sessionID=session_id,
+        role="assistant",
+        time={"created": 2_100, "completed": 2_200},
+        parentID=user.id,
+        modelID="claude-sonnet",
+        providerID="anthropic",
+        mode="standard",
+        agent="rex",
+        path=MessagePath(cwd="/tmp/stats-project", root="/tmp/stats-project"),
+        tokens=TokenUsage(),
+        cost=0.0,
+    )
+    return [
+        MessageWithParts(
+            info=user,
+            parts=[TextPart(id=f"{session_id}_user_text", sessionID=session_id, messageID=user.id, text="hi")],
+        ),
+        MessageWithParts(
+            info=assistant,
+            parts=[TextPart(id=f"{session_id}_assistant_text", sessionID=session_id, messageID=assistant.id, text="ok")],
+        ),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_aggregate_stats_uses_current_message_model(monkeypatch) -> None:
     session = _build_session()
@@ -123,6 +158,35 @@ async def test_aggregate_stats_uses_current_message_model(monkeypatch) -> None:
     assert result.model_usage["anthropic/claude-sonnet"].tokens_output == 10
 
 
+@pytest.mark.asyncio
+async def test_aggregate_stats_median_ignores_zero_token_sessions(monkeypatch) -> None:
+    session_with_tokens = _build_session()
+    zero_session = SessionInfo(
+        id="ses_stats_zero",
+        projectID="proj_stats",
+        directory="/tmp/stats-project",
+        title="Zero Session",
+        time=SessionTime(created=2_000, updated=3_000),
+    )
+
+    async def fake_get_all_sessions():
+        return [session_with_tokens, zero_session]
+
+    async def fake_list_with_parts(session_id: str, include_archived: bool = False):
+        assert include_archived is False
+        if session_id == session_with_tokens.id:
+            return _build_messages(session_id)
+        return _build_zero_token_messages(session_id)
+
+    monkeypatch.setattr(stats_cmd, "_get_all_sessions", fake_get_all_sessions)
+    monkeypatch.setattr(stats_cmd.Message, "list_with_parts", fake_list_with_parts)
+
+    result = await stats_cmd._aggregate_stats(days=None, project_filter=None)
+
+    assert result.total_sessions == 2
+    assert result.median_tokens_per_session == 21
+
+
 def test_stats_command_renders_output(monkeypatch) -> None:
     async def fake_storage_init() -> None:
         return None
@@ -139,8 +203,10 @@ def test_stats_command_renders_output(monkeypatch) -> None:
             model_usage={"anthropic/claude-sonnet": ModelUsage(messages=2, tokens_input=20, tokens_output=15, cost=2.5)},
             days=1,
             cost_per_day=2.5,
+            tokens_per_day=35.0,
             tokens_per_session=17.5,
             median_tokens_per_session=17.5,
+            has_reasoning_tokens=True,
         )
 
     monkeypatch.setattr(stats_cmd.Storage, "init", fake_storage_init)
@@ -150,7 +216,67 @@ def test_stats_command_renders_output(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "OVERVIEW" in result.stdout
-    assert "COST & TOKENS" in result.stdout
+    assert "TOKENS" in result.stdout
+    assert "Total Tokens" in result.stdout
+    assert "Avg Tokens/Day" in result.stdout
+    assert "Median Tokens/Active Session" in result.stdout
     assert "MODEL USAGE" in result.stdout
     assert "TOOL USAGE" in result.stdout
     assert "anthropic/claude-sonnet" in result.stdout
+
+
+def test_stats_command_defaults_tools_to_five(monkeypatch) -> None:
+    async def fake_storage_init() -> None:
+        return None
+
+    async def fake_aggregate_stats(days, project):
+        return SessionStats(
+            total_sessions=1,
+            total_messages=2,
+            total_tokens=TokenStats(input=20, output=10),
+            tool_usage={f"tool_{i}": 10 - i for i in range(6)},
+            model_usage={},
+            days=1,
+            tokens_per_day=30.0,
+            tokens_per_session=30.0,
+            median_tokens_per_session=30.0,
+        )
+
+    monkeypatch.setattr(stats_cmd.Storage, "init", fake_storage_init)
+    monkeypatch.setattr(stats_cmd, "_aggregate_stats", fake_aggregate_stats)
+
+    result = runner.invoke(stats_cmd.stats_app, [])
+
+    assert result.exit_code == 0
+    assert "tool_0" in result.stdout
+    assert "tool_4" in result.stdout
+    assert "tool_5" not in result.stdout
+
+
+def test_stats_command_hides_reasoning_when_zero(monkeypatch) -> None:
+    async def fake_storage_init() -> None:
+        return None
+
+    async def fake_aggregate_stats(days, project):
+        assert days is None
+        assert project is None
+        return SessionStats(
+            total_sessions=1,
+            total_messages=2,
+            total_tokens=TokenStats(input=20, output=10, reasoning=0, cache_read=0, cache_write=0),
+            tool_usage={},
+            model_usage={},
+            days=1,
+            tokens_per_day=30.0,
+            tokens_per_session=30.0,
+            median_tokens_per_session=30.0,
+            has_reasoning_tokens=False,
+        )
+
+    monkeypatch.setattr(stats_cmd.Storage, "init", fake_storage_init)
+    monkeypatch.setattr(stats_cmd, "_aggregate_stats", fake_aggregate_stats)
+
+    result = runner.invoke(stats_cmd.stats_app, [])
+
+    assert result.exit_code == 0
+    assert "Reasoning" not in result.stdout
