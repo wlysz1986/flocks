@@ -69,19 +69,11 @@ export default defineConfig({
   server: {
     port: 5173,
     host: '127.0.0.1',
-    allowedHosts: [
-      'flocks.threatbook-inc.cn',
-      'ops-flocks.threatbook-inc.cn'
-    ],
     proxy: createApiProxy(apiProxyTarget),
   },
   preview: {
     port: 5173,
     host: '127.0.0.1',
-    allowedHosts: [
-      'flocks.threatbook-inc.cn',
-      'ops-flocks.threatbook-inc.cn'
-    ],
     proxy: createApiProxy(apiProxyTarget),
   },
 })
