@@ -9,6 +9,7 @@ Python interpreter.
 
 import asyncio
 import os
+import shutil
 from pathlib import Path
 import sys
 from typing import TYPE_CHECKING, List
@@ -21,8 +22,30 @@ if TYPE_CHECKING:
 log = Log.create(service="mcp.installer")
 
 
+def _resolve_executable(cmd: List[str]) -> List[str]:
+    """Resolve the executable in *cmd* so it works on Windows.
+
+    On Windows, scripts like ``npm`` are actually ``.cmd`` batch files that
+    ``create_subprocess_exec`` cannot locate directly.  We use
+    ``shutil.which`` to find the real path and, when the result is a
+    ``.cmd`` / ``.bat`` wrapper, prepend ``cmd.exe /c`` so the OS can
+    execute it.
+    """
+    if not cmd:
+        return cmd
+    exe = cmd[0]
+    resolved = shutil.which(exe)
+    if resolved is None:
+        return cmd
+    if os.name == "nt" and resolved.lower().endswith((".cmd", ".bat")):
+        comspec = os.environ.get("COMSPEC") or "cmd.exe"
+        return [comspec, "/c", resolved, *cmd[1:]]
+    return [resolved, *cmd[1:]]
+
+
 async def _run_subprocess(cmd: List[str], timeout: float = 120.0) -> None:
     """Run a subprocess, raise RuntimeError with stderr output on failure."""
+    cmd = _resolve_executable(cmd)
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -70,7 +93,12 @@ def managed_python_bin_dir() -> Path:
 
 
 async def _ensure_managed_python_env() -> str:
-    """Create the managed Python virtualenv on first use."""
+    """Create the managed Python virtualenv on first use.
+
+    Installs the ``mcp`` SDK as a baseline dependency because every Python-based
+    MCP server needs it at runtime (``from mcp.server.fastmcp import FastMCP``).
+    Many community packages fail to declare this dependency explicitly.
+    """
     python_bin = managed_python_executable()
     if Path(python_bin).exists():
         return python_bin
@@ -82,7 +110,28 @@ async def _ensure_managed_python_env() -> str:
     })
     await _run_subprocess([sys.executable, "-m", "venv", str(env_dir)], timeout=180.0)
     await _run_subprocess([python_bin, "-m", "pip", "install", "--upgrade", "pip"], timeout=180.0)
+    await _run_subprocess([python_bin, "-m", "pip", "install", "mcp"], timeout=180.0)
     return python_bin
+
+
+async def _ensure_mcp_sdk(python_bin: str) -> None:
+    """Ensure the ``mcp`` SDK package is installed in the managed virtualenv.
+
+    Many community Python MCP servers depend on ``mcp`` at runtime but fail to
+    declare it in their package metadata, causing ``ModuleNotFoundError`` when
+    the server process starts.  This is a no-op if already installed.
+    """
+    try:
+        await _run_subprocess(
+            [python_bin, "-c", "import mcp"],
+            timeout=10.0,
+        )
+    except RuntimeError:
+        log.info("mcp.installer.mcp_sdk_missing", {"python": python_bin})
+        await _run_subprocess(
+            [python_bin, "-m", "pip", "install", "mcp"],
+            timeout=180.0,
+        )
 
 
 def rewrite_local_command_for_managed_python(command: List[str], pip_package: str | None = None) -> List[str]:
@@ -157,6 +206,7 @@ async def preflight_install(entry: "CatalogEntry") -> None:
 
     elif entry.install.pip and executable not in {"npx", "uvx"}:
         python_bin = await _ensure_managed_python_env()
+        await _ensure_mcp_sdk(python_bin)
         log.info("mcp.installer.pip", {
             "server": entry.id,
             "package": entry.install.pip,
