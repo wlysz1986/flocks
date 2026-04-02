@@ -174,6 +174,11 @@ default = true
 
 ### Docker Issues
 
+Docker registry mirror in China
+``` bash
+ghcr.nju.edu.cn/agentflocks/flocks:latest
+```
+
 Permission issues for `/home/flocks/.flocks` after startup:
 
 ``` bash

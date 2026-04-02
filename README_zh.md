@@ -52,21 +52,21 @@ Flocks 支持两种部署方式：
 
 ```bash
 # 一键安装后端 + WebUI
-curl -fsSL https://gitee.com/flocks/flocks/raw/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgentFlocks/flocks/main/install.sh | bash
 # 默认会在当前目录下创建 ./flocks
 
 # 可选：同时安装 TUI 依赖
-curl -fsSL https://gitee.com/flocks/flocks/raw/main/install.sh | bash -s -- --with-tui
+curl -fsSL https://raw.githubusercontent.com/AgentFlocks/flocks/main/install.sh | bash -s -- --with-tui
 ```
 
 #### Windows PowerShell (Administrator)
 
 ```powershell
 # 一键安装后端 + WebUI
-powershell -c "irm https://gitee.com/flocks/flocks/raw/main/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/AgentFlocks/flocks/main/install.ps1 | iex"
 
 # 可选：同时安装 TUI 依赖
-powershell -c "& ([scriptblock]::Create((irm https://gitee.com/flocks/flocks/raw/main/install.ps1))) -InstallTui"
+powershell -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/AgentFlocks/flocks/main/install.ps1))) -InstallTui"
 ```
 
 #### github源码安装
@@ -172,6 +172,11 @@ default = true
 ```
 
 ### Docker 问题
+
+Docker 国内镜像地址
+``` bash
+ghcr.nju.edu.cn/agentflocks/flocks:latest
+```
 
 启动后 `/home/flocks/.flocks` 权限问题
 

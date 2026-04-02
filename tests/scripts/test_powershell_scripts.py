@@ -12,6 +12,11 @@ POWERSHELL_SCRIPTS = (
     SCRIPT_DIR / "install.ps1",
     SCRIPT_DIR / "run.ps1",
 )
+POWERSHELL_SCRIPT_ENCODINGS = (
+    (REPO_ROOT / "install.ps1", False),
+    (SCRIPT_DIR / "install.ps1", True),
+    (SCRIPT_DIR / "run.ps1", True),
+)
 
 
 def _parse_script(script_path: Path) -> subprocess.CompletedProcess[str]:
@@ -41,6 +46,17 @@ def _parse_script(script_path: Path) -> subprocess.CompletedProcess[str]:
 def test_powershell_scripts_parse_without_errors(script_path: Path) -> None:
     result = _parse_script(script_path)
     assert result.returncode == 0, result.stdout or result.stderr
+
+
+@pytest.mark.parametrize(("script_path", "expect_bom"), POWERSHELL_SCRIPT_ENCODINGS)
+def test_powershell_scripts_use_expected_utf8_encoding_and_crlf(
+    script_path: Path, expect_bom: bool
+) -> None:
+    script_bytes = script_path.read_bytes()
+
+    assert script_bytes.startswith(b"\xef\xbb\xbf") is expect_bom
+    assert b"\r\n" in script_bytes
+    assert script_bytes.replace(b"\r\n", b"").count(b"\n") == 0
 
 
 def test_windows_installer_process_match_logic_avoids_matches_auto_variable() -> None:
