@@ -591,7 +591,7 @@ async def update_agent_model(name: str, req: AgentModelUpdateRequest):
             except Storage.NotFoundError:
                 pass
 
-            if agent_data is not None:
+            if agent_data is not None and agent_data.get("name"):
                 agent_data["model"] = req.model.model_dump() if req.model else None
                 await Storage.write(agent_key, agent_data)
 
