@@ -248,6 +248,62 @@ class TestWorkspaceUpload:
         assert resp.status_code == status.HTTP_200_OK
         assert (mock_workspace / "subdir" / "nested.txt").exists()
 
+    @pytest.mark.asyncio
+    async def test_upload_binary_file_succeeds_without_chat_purpose(
+        self, client: AsyncClient, mock_workspace: Path
+    ):
+        """Generic workspace uploads remain unrestricted for non-chat usage."""
+        resp = await client.post(
+            "/api/workspace/upload",
+            files={"files": ("archive.zip", io.BytesIO(b"zip"), "application/zip")},
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        result = resp.json()["uploaded"][0]
+        assert result.get("error") is None
+        assert result["name"] == "archive.zip"
+        assert (mock_workspace / "archive.zip").exists()
+
+    @pytest.mark.asyncio
+    async def test_chat_upload_rejects_disallowed_file_type(
+        self, client: AsyncClient, mock_workspace: Path
+    ):
+        """Chat uploads reject unsupported file types via purpose=chat."""
+        resp = await client.post(
+            "/api/workspace/upload",
+            params={"purpose": "chat"},
+            files={"files": ("archive.zip", io.BytesIO(b"zip"), "application/zip")},
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        result = resp.json()["uploaded"][0]
+        assert "Unsupported file type" in result["error"]
+        assert not (mock_workspace / "archive.zip").exists()
+
+    @pytest.mark.asyncio
+    async def test_upload_renames_duplicate_file(
+        self, client: AsyncClient, mock_workspace: Path
+    ):
+        """Uploading the same filename twice should preserve the original file."""
+        first = await client.post(
+            "/api/workspace/upload",
+            params={"dest": "uploads"},
+            files={"files": ("report.pdf", io.BytesIO(b"first"), "application/pdf")},
+        )
+        second = await client.post(
+            "/api/workspace/upload",
+            params={"dest": "uploads"},
+            files={"files": ("report.pdf", io.BytesIO(b"second"), "application/pdf")},
+        )
+        assert first.status_code == status.HTTP_200_OK
+        assert second.status_code == status.HTTP_200_OK
+        first_item = first.json()["uploaded"][0]
+        second_item = second.json()["uploaded"][0]
+        assert first_item["name"] == "report.pdf"
+        assert second_item["name"] == "report (1).pdf"
+        assert first_item["path"] == "uploads/report.pdf"
+        assert second_item["path"] == "uploads/report (1).pdf"
+        assert (mock_workspace / "uploads" / "report.pdf").read_bytes() == b"first"
+        assert (mock_workspace / "uploads" / "report (1).pdf").read_bytes() == b"second"
+
 
 # ===========================================================================
 # Download
