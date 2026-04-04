@@ -866,7 +866,7 @@ class ToolRegistry:
 
         _tool_groups = [
             # file/ — filesystem operations
-            ("flocks.tool.file", ["read", "write", "edit", "multiedit", "apply_patch", "glob", "list_tool", "file_search"]),
+            ("flocks.tool.file", ["read", "write", "edit", "multiedit", "apply_patch", "glob", "list_tool", "file_search", "doc_parser"]),
             # code/ — code analysis + terminal
             ("flocks.tool.code", ["bash", "grep", "codesearch", "lsp_tool"]),
             # web/ — internet access
