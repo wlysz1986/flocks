@@ -1647,6 +1647,7 @@ export const ChatMessageBubble = memo(ChatMessageBubbleInner, (prev, next) => {
   return (
     prevLast?.text === nextLast?.text &&
     prevLast?.thinking === nextLast?.thinking &&
-    prevLast?.state?.status === nextLast?.state?.status
+    prevLast?.state?.status === nextLast?.state?.status &&
+    prevLast?.state?.metadata === nextLast?.state?.metadata
   );
 });
