@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import shutil
 import threading
 import time
@@ -33,6 +34,8 @@ from flocks.workflow.center import (
     stop_workflow_service,
 )
 from flocks.session.recorder import Recorder
+from flocks.session.message import Message, MessageRole
+from flocks.session.session import Session
 from flocks.workflow.workflow_lint import lint_workflow
 from flocks.workflow.compiler import compile_workflow
 from flocks.workflow.fs_store import (
@@ -42,9 +45,11 @@ from flocks.workflow.fs_store import (
     workflow_scan_dirs as _all_scan_dirs,
 )
 from flocks.workflow.io import load_workflow, dump_workflow
+from flocks.workflow.tools import get_tool_registry
 from flocks.config.config import Config
 from flocks.storage.storage import Storage
 from flocks.server.routes.event import publish_event
+from flocks.tool import ToolContext
 from flocks.utils.log import Log
 
 
@@ -114,6 +119,9 @@ class WorkflowRunRequest(BaseModel):
     inputs: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Input parameters")
     timeout_s: Optional[float] = Field(None, alias="timeoutS", description="Timeout in seconds")
     trace: bool = Field(False, description="Enable tracing")
+    session_id: Optional[str] = Field(None, alias="sessionId", description="Optional parent session ID")
+    message_id: Optional[str] = Field(None, alias="messageId", description="Optional parent message ID")
+    agent: Optional[str] = Field(None, description="Optional agent name for tool context")
 
 
 class WorkflowExecutionResponse(BaseModel):
@@ -184,6 +192,87 @@ def _read_workflow_from_fs(workflow_id: str) -> Optional[Dict[str, Any]]:
     is ``<root>/<id>/`` with ``workflow.json`` inside.
     """
     return shared_read_workflow_from_fs(workflow_id)
+
+
+async def _build_workflow_tool_context(
+    *,
+    workflow_id: str,
+    action_name: str,
+    session_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    agent: Optional[str] = None,
+) -> ToolContext:
+    """Build a real ToolContext for workflow execution.
+
+    Prefer the caller-provided session/message. When absent, create a temporary
+    parent session and synthetic user message so workflow-internal tools such as
+    `task` can resolve a valid parent session.
+    """
+    effective_session_id = str(session_id or "").strip()
+    effective_message_id = str(message_id or "").strip()
+    effective_agent = str(agent or "").strip()
+
+    workspace_dir = os.getcwd()
+    project_id = "default"
+    try:
+        from flocks.project.instance import Instance
+
+        workspace_dir = str(getattr(Instance, "directory", None) or workspace_dir)
+        project = getattr(Instance, "project", None)
+        if project is not None and getattr(project, "id", None):
+            project_id = str(project.id)
+    except Exception:
+        workspace_dir = str(_find_workspace_root())
+
+    parent_session = None
+    if effective_session_id:
+        parent_session = await Session.get_by_id(effective_session_id)
+        if not parent_session:
+            raise HTTPException(status_code=400, detail=f"Parent session not found: {effective_session_id}")
+        workspace_dir = str(getattr(parent_session, "directory", None) or workspace_dir)
+        if getattr(parent_session, "project_id", None):
+            project_id = str(parent_session.project_id)
+        if not effective_agent:
+            effective_agent = str(getattr(parent_session, "agent", None) or "rex")
+    else:
+        parent_session = await Session.create(
+            project_id=project_id,
+            directory=workspace_dir,
+            title=f"Workflow {action_name}: {workflow_id}",
+            agent=effective_agent or "rex",
+            category="task",
+            metadata={
+                "workflowTempParent": True,
+                "hideFromSessionManager": True,
+                "workflowId": workflow_id,
+                "workflowAction": action_name,
+            },
+        )
+        effective_session_id = parent_session.id
+        workspace_dir = str(getattr(parent_session, "directory", None) or workspace_dir)
+        if not effective_agent:
+            effective_agent = str(getattr(parent_session, "agent", None) or "rex")
+
+    if not effective_message_id:
+        message = await Message.create(
+            session_id=effective_session_id,
+            role=MessageRole.USER,
+            content=f"[Workflow {action_name}] {workflow_id}",
+            agent=effective_agent or "rex",
+            synthetic=True,
+        )
+        effective_message_id = message.id
+
+    return ToolContext(
+        session_id=effective_session_id,
+        message_id=effective_message_id,
+        agent=effective_agent or "rex",
+        event_publish_callback=publish_event,
+        extra={
+            "workspace_dir": workspace_dir,
+            "main_session_key": effective_session_id,
+        },
+    )
 
 
 def _write_workflow_to_fs(
@@ -367,6 +456,7 @@ async def _run_workflow_execution_task(
     req: WorkflowRunRequest,
     exec_id: str,
     cancel_event: threading.Event,
+    tool_context: Optional[ToolContext] = None,
 ) -> None:
     """Execute a workflow in the background and keep the execution record updated."""
     exec_key = _workflow_execution_key(exec_id)
@@ -398,6 +488,7 @@ async def _run_workflow_execution_task(
             trace=req.trace,
             on_step_complete=_on_step_complete,
             cancel=cancel_event.is_set,
+            tool_context=tool_context,
         )
 
         duration = time.time() - start_time
@@ -716,6 +807,13 @@ async def run_workflow_endpoint(workflow_id: str, req: WorkflowRunRequest):
             raise HTTPException(status_code=404, detail=f"Workflow not found: {workflow_id}")
 
         workflow_json = data["workflowJson"]
+        tool_context = await _build_workflow_tool_context(
+            workflow_id=workflow_id,
+            action_name="run",
+            session_id=req.session_id,
+            message_id=req.message_id,
+            agent=req.agent,
+        )
 
         # Create execution record
         exec_id = str(uuid.uuid4())
@@ -741,6 +839,7 @@ async def run_workflow_endpoint(workflow_id: str, req: WorkflowRunRequest):
                 req=req,
                 exec_id=exec_id,
                 cancel_event=cancel_event,
+                tool_context=tool_context,
             )
         )
         _active_workflow_executions[exec_id] = ActiveWorkflowExecution(
@@ -1405,6 +1504,9 @@ class RunNodeRequest(BaseModel):
 
     node_id: str = Field(..., description="Node ID to execute")
     inputs: Dict[str, Any] = Field(default_factory=dict, description="Input data for the node")
+    session_id: Optional[str] = Field(None, alias="sessionId", description="Optional parent session ID")
+    message_id: Optional[str] = Field(None, alias="messageId", description="Optional parent message ID")
+    agent: Optional[str] = Field(None, description="Optional agent name for tool context")
 
 
 class RunNodeResponse(BaseModel):
@@ -1434,6 +1536,13 @@ async def run_single_node(workflow_id: str, req: RunNodeRequest):
             raise HTTPException(status_code=404, detail=f"Workflow not found: {workflow_id}")
 
         workflow_json = data["workflowJson"]
+        tool_context = await _build_workflow_tool_context(
+            workflow_id=workflow_id,
+            action_name=f"run-node:{req.node_id}",
+            session_id=req.session_id,
+            message_id=req.message_id,
+            agent=req.agent,
+        )
 
         try:
             from flocks.workflow.models import Workflow as WfModel
@@ -1441,7 +1550,10 @@ async def run_single_node(workflow_id: str, req: RunNodeRequest):
             from flocks.workflow.repl_runtime import PythonExecRuntime
 
             wf = WfModel.from_dict(workflow_json)
-            engine = WorkflowEngine(wf, runtime=PythonExecRuntime())
+            engine = WorkflowEngine(
+                wf,
+                runtime=PythonExecRuntime(tool_registry=get_tool_registry(tool_context=tool_context)),
+            )
 
             step_result = await asyncio.to_thread(engine.run_node, req.node_id, req.inputs)
 
