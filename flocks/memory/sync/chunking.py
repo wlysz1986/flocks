@@ -6,7 +6,6 @@ Based on OpenClaw's chunking algorithm.
 """
 
 from typing import List
-import tiktoken
 
 from flocks.memory.types import MemoryChunk
 from flocks.memory.config import MemoryChunkingConfig
@@ -28,6 +27,9 @@ class TextChunker:
         """
         self.config = config
         try:
+            from flocks.utils.tiktoken_cache import ensure as _ensure_tiktoken
+            _ensure_tiktoken()
+            import tiktoken
             self.encoding = tiktoken.get_encoding("cl100k_base")
         except Exception as e:
             log.warn("chunking.encoding.failed", {"error": str(e)})

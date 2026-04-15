@@ -529,6 +529,8 @@ class LLM:
             Estimated token count
         """
         try:
+            from flocks.utils.tiktoken_cache import ensure as _ensure_tiktoken
+            _ensure_tiktoken()
             import tiktoken
             encoding = tiktoken.encoding_for_model(model)
             return len(encoding.encode(text))

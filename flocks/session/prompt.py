@@ -340,6 +340,8 @@ class SessionPrompt:
         """Get or create tiktoken tokenizer"""
         if cls._tokenizer is None:
             try:
+                from flocks.utils.tiktoken_cache import ensure as _ensure_tiktoken
+                _ensure_tiktoken()
                 import tiktoken
                 cls._tokenizer = tiktoken.encoding_for_model("gpt-4")
             except ImportError:
