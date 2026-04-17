@@ -6,7 +6,6 @@ Main HTTP API server for AI-Native SecOps Platform
 
 import asyncio
 import os
-import re
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -300,13 +299,23 @@ log = Log.create(service="server")
 # CORS Configuration
 #
 # Priority order:
-#   1. Explicit ``server.cors`` in flocks.json  → use those exact origins.
+#   1. Explicit ``server.cors`` in flocks.json  → use those origins (plus
+#      the localhost fallback regex).
 #   2. ``_FLOCKS_WEBUI_HOST`` / ``_FLOCKS_WEBUI_PORT`` env vars set by
-#      ``start_backend()`` → auto-build origin for the actual WebUI address.
+#      ``start_backend()`` for a concrete IP → auto-whitelist that single
+#      origin.  We deliberately do NOT auto-whitelist when the WebUI binds
+#      to ``0.0.0.0``: matching ``[^/]+:<port>`` would accept every host on
+#      that port, effectively disabling CORS.  Remote deployments that run
+#      ``--webui-host 0.0.0.0`` must set ``server.cors`` explicitly in
+#      ``flocks.json``.
 #   3. Fallback → only localhost (any port) via regex.
 #
-# This ensures ``--server-host <ip> --webui-host <ip>`` works out of the
-# box for remote access without requiring manual ``server.cors`` config.
+# Config is read lazily on the first request via
+# :class:`_DeferredCORSMiddleware` so that importing ``app`` in an async
+# context (e.g. pytest fixtures) does not call ``asyncio.run()`` inside a
+# running event loop, and so that ``Config.get_global()`` is not invoked at
+# import time — which would otherwise cache ``HOME`` before test harnesses
+# can monkey-patch it.
 
 _LOCALHOST_ORIGIN_RE = r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$"
 
@@ -317,29 +326,71 @@ def _is_localhost(host: str) -> bool:
     return host in _LOCALHOST_HOSTS
 
 
-def _read_cors_config() -> tuple[list[str], str | None]:
-    """Return (allow_origins, allow_origin_regex) for CORSMiddleware."""
-    import asyncio
+def _read_cors_config() -> tuple[list[str], Optional[str]]:
+    """Return (allow_origins, allow_origin_regex) for CORSMiddleware.
+
+    Reads ``server.cors`` directly from ``flocks.json`` using synchronous
+    JSON I/O — this avoids ``asyncio.run()`` inside a running event loop
+    and keeps the hot path off the async ``Config.get()`` pipeline.
+    """
+    import json
 
     try:
-        cfg = asyncio.run(Config.get())
-        if cfg and cfg.server and cfg.server.cors:
-            return cfg.server.cors, _LOCALHOST_ORIGIN_RE
+        cfg_file = Config.get_config_file()
+        if cfg_file.exists():
+            with cfg_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            server_cfg = data.get("server") or {}
+            cors = server_cfg.get("cors")
+            if isinstance(cors, list):
+                origins = [c for c in cors if isinstance(c, str) and c]
+                if origins:
+                    return origins, _LOCALHOST_ORIGIN_RE
     except Exception:
         pass
 
     webui_host = os.environ.get("_FLOCKS_WEBUI_HOST", "")
     webui_port = os.environ.get("_FLOCKS_WEBUI_PORT", "")
 
-    if webui_host and not _is_localhost(webui_host) and webui_port:
-        if webui_host == "0.0.0.0":
-            origin_re = rf"^https?://[^/]+:{re.escape(webui_port)}$"
-            return [], origin_re
-        else:
-            extra_origin = f"http://{webui_host}:{webui_port}"
-            return [extra_origin], _LOCALHOST_ORIGIN_RE
+    if (
+        webui_host
+        and webui_port
+        and not _is_localhost(webui_host)
+        and webui_host != "0.0.0.0"
+    ):
+        extra_origin = f"http://{webui_host}:{webui_port}"
+        return [extra_origin], _LOCALHOST_ORIGIN_RE
 
     return [], _LOCALHOST_ORIGIN_RE
+
+
+class _DeferredCORSMiddleware:
+    """Lazy wrapper around :class:`CORSMiddleware`.
+
+    Starlette builds the middleware stack on the first request, but the
+    inner middleware's constructor kwargs are evaluated at
+    ``add_middleware`` call time.  We defer one step further: the wrapped
+    :class:`CORSMiddleware` is instantiated on the first incoming request,
+    after the test harness (or the real runtime) has finished setting up
+    ``HOME`` / config paths.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+        self._inner = None
+
+    async def __call__(self, scope, receive, send):
+        if self._inner is None:
+            allow_origins, allow_origin_regex = _read_cors_config()
+            self._inner = CORSMiddleware(
+                self.app,
+                allow_origins=allow_origins,
+                allow_origin_regex=allow_origin_regex,
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+        await self._inner(scope, receive, send)
 
 
 # Instance Context Middleware
@@ -487,16 +538,9 @@ async def general_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Configure CORS
-_cors_origins, _cors_origin_re = _read_cors_config()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_origin_regex=_cors_origin_re,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Configure CORS (config is read lazily on the first request; see
+# _DeferredCORSMiddleware for rationale).
+app.add_middleware(_DeferredCORSMiddleware)
 
 
 # Import and include routers

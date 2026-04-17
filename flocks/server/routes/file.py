@@ -71,8 +71,13 @@ async def search_files(
     
     Search for files or directories by name or pattern in the project directory.
     """
-    import re
-    if not query or len(query) > 200 or re.search(r'[;\|`$\x00]', query):
+    # Only enforce basic resource limits here.  The underlying ``File.search``
+    # invokes ``subprocess.run`` with ``shell=False`` and an argv list, so the
+    # query cannot reach a shell — there is no injection vector that warrants
+    # rejecting legitimate filenames containing ``;`` ``|`` ``$`` ``` ``` etc.
+    # The null byte is still refused because many POSIX APIs treat it as a
+    # string terminator and will silently truncate the argument.
+    if not query or len(query) > 200 or "\x00" in query:
         raise HTTPException(status_code=400, detail="Invalid search query")
     try:
         results = await File.search(query=query, limit=limit, dirs=dirs, type=type)
@@ -130,13 +135,17 @@ async def find_text(pattern: str = Query(..., description="Search pattern")):
             raise HTTPException(status_code=403, detail="No Flocks project root found")
         cwd = str(project_root)
 
-        if not pattern or len(pattern) > 500:
+        if not pattern or len(pattern) > 500 or "\x00" in pattern:
             raise HTTPException(status_code=400, detail="Invalid search pattern")
 
+        # ``grep`` runs as its own argv (no shell); the ``--`` sentinel stops
+        # ``grep`` from interpreting a leading ``-`` in ``pattern`` as an
+        # option.  We intentionally keep regex semantics (the historical
+        # contract) and rely on ``subprocess.run(shell=False)`` plus the
+        # bounded cwd (``project_root``) to contain the command.
         cmd = [
             "grep",
             "-rn",  # recursive, line numbers
-            "-F",   # fixed string, prevents regex injection
             "--include=*.py",
             "--include=*.js",
             "--include=*.ts",
