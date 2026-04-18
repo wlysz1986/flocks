@@ -73,3 +73,57 @@ Type: dirifempty; Name: "{autoprograms}\{#MyAppName}"
 ; Remove all installed code under {app}, then remove the install root directory.
 Type: filesandordirs; Name: "{app}\*"
 Type: dirifempty; Name: "{app}"
+
+[Code]
+function IsUnderBaseDir(const CandidateDir, BaseDir: string): Boolean;
+var
+  NormalizedCandidate: string;
+  NormalizedBase: string;
+begin
+  if BaseDir = '' then
+  begin
+    Result := False;
+    exit;
+  end;
+
+  NormalizedCandidate := Lowercase(RemoveBackslashUnlessRoot(ExpandFileName(CandidateDir)));
+  NormalizedBase := Lowercase(RemoveBackslashUnlessRoot(ExpandFileName(BaseDir)));
+
+  Result :=
+    (NormalizedCandidate = NormalizedBase) or
+    (Pos(NormalizedBase + '\', NormalizedCandidate + '\') = 1);
+end;
+
+function IsProgramFilesPath(const TargetDir: string): Boolean;
+var
+  ProgramFilesDir: string;
+  ProgramFilesX86Dir: string;
+begin
+  ProgramFilesDir := ExpandConstant('{%ProgramFiles}');
+  ProgramFilesX86Dir := ExpandConstant('{%ProgramFiles(x86)}');
+
+  Result :=
+    IsUnderBaseDir(TargetDir, ProgramFilesDir) or
+    IsUnderBaseDir(TargetDir, ProgramFilesX86Dir);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  SelectedDir: string;
+begin
+  Result := True;
+
+  if CurPageID <> wpSelectDir then
+    exit;
+
+  SelectedDir := WizardDirValue;
+  if IsProgramFilesPath(SelectedDir) then
+  begin
+    MsgBox(
+      'Warning: Installing under "C:\Program Files" (or Program Files (x86)) may require Administrator privileges when running or updating Flocks.' + #13#10 + #13#10 +
+      '警告：安装到“C:\Program Files”（或 Program Files (x86)）目录后，运行或更新 Flocks 可能需要管理员权限。',
+      mbInformation,
+      MB_OK
+    );
+  end;
+end;
