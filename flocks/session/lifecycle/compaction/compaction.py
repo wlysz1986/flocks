@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import List, Optional, Dict, Any, Literal
 
 from flocks.utils.log import Log
@@ -37,10 +38,28 @@ log = Log.create(service="session.compaction")
 # holds a weak reference).  The done-callback removes finished tasks from the
 # set and logs any exception.
 #
+# Concurrency safety:
+#   * ``daily.write_daily(append=True)`` is *not* atomic — it does a
+#     read-modify-write on the daily memory file.  When the synchronous flush
+#     was inlined into ``process()`` two flushes for the same session could
+#     never overlap.  Now that we fire-and-forget, two consecutive
+#     compactions on the same session would race and silently drop the older
+#     memory.  We restore strict per-session serialisation via
+#     ``_session_flush_locks`` while still letting *different* sessions run
+#     in parallel.
+#   * The background task is wrapped in ``asyncio.wait_for`` so that a stuck
+#     provider call cannot hold ``chat_messages`` / ``provider`` references
+#     forever.  The timeout defaults to 600s and is tunable via
+#     ``FLOCKS_COMPACTION_FLUSH_TIMEOUT``.
+#
 # Set ``FLOCKS_COMPACTION_FLUSH_BACKGROUND=0`` to fall back to the legacy
 # synchronous behaviour (useful for tests or debugging).
 
+_FLUSH_TASK_NAME_PREFIX = "compaction.flush."
+_DEFAULT_FLUSH_TIMEOUT_SECONDS = 600
+
 _pending_flush_tasks: set[asyncio.Task] = set()
+_session_flush_locks: dict[str, asyncio.Lock] = {}
 
 
 def _flush_in_background_enabled() -> bool:
@@ -48,19 +67,83 @@ def _flush_in_background_enabled() -> bool:
     return raw not in {"0", "false", "no", "off", ""}
 
 
-def _on_flush_task_done(task: "asyncio.Task") -> None:
+def _flush_timeout_seconds() -> float:
+    raw = os.getenv("FLOCKS_COMPACTION_FLUSH_TIMEOUT")
+    if raw is None or raw.strip() == "":
+        return float(_DEFAULT_FLUSH_TIMEOUT_SECONDS)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        log.warn("compaction.flush.timeout_parse_error", {
+            "raw": raw,
+            "fallback": _DEFAULT_FLUSH_TIMEOUT_SECONDS,
+        })
+        return float(_DEFAULT_FLUSH_TIMEOUT_SECONDS)
+    if value <= 0:
+        return float(_DEFAULT_FLUSH_TIMEOUT_SECONDS)
+    return value
+
+
+def _get_flush_lock(session_id: str) -> asyncio.Lock:
+    """Return (lazily creating) the per-session flush serialisation lock."""
+    lock = _session_flush_locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_flush_locks[session_id] = lock
+    return lock
+
+
+def _session_id_from_task(task: asyncio.Task) -> str:
+    name = task.get_name() or ""
+    if name.startswith(_FLUSH_TASK_NAME_PREFIX):
+        return name[len(_FLUSH_TASK_NAME_PREFIX):]
+    return ""
+
+
+def _on_flush_task_done(task: asyncio.Task) -> None:
     _pending_flush_tasks.discard(task)
+    session_id = _session_id_from_task(task)
     if task.cancelled():
-        log.info("compaction.flush.background.cancelled", {"task": task.get_name()})
+        log.info("compaction.flush.background.cancelled", {
+            "session_id": session_id,
+            "task": task.get_name(),
+        })
         return
     exc = task.exception()
     if exc is not None:
         log.warn("compaction.flush.background.error", {
+            "session_id": session_id,
             "task": task.get_name(),
             "error": str(exc),
+            "error_type": type(exc).__name__,
         })
     else:
-        log.debug("compaction.flush.background.done", {"task": task.get_name()})
+        log.debug("compaction.flush.background.done", {
+            "session_id": session_id,
+            "task": task.get_name(),
+        })
+
+
+async def drain_pending_flush_tasks(timeout: float = 30.0) -> None:
+    """Await all in-flight background flush tasks.
+
+    Intended for graceful process shutdown / test fixtures so that
+    fire-and-forget flushes do not get cancelled with their daily-memory
+    writes half-applied.  Returns once every pending task has finished or
+    *timeout* seconds have elapsed (whichever comes first).
+    """
+    if not _pending_flush_tasks:
+        return
+    pending = list(_pending_flush_tasks)
+    log.info("compaction.flush.drain.start", {
+        "pending": len(pending),
+        "timeout": timeout,
+    })
+    done, still_pending = await asyncio.wait(pending, timeout=timeout)
+    log.info("compaction.flush.drain.complete", {
+        "drained": len(done),
+        "still_pending": len(still_pending),
+    })
 
 
 class SessionCompaction:
@@ -197,8 +280,19 @@ class SessionCompaction:
 
         Background scheduling is the default; the legacy synchronous mode is
         re-enabled by setting ``FLOCKS_COMPACTION_FLUSH_BACKGROUND=0``.
-        Falls back to a synchronous await whenever no event loop is running
-        (defensive — should not happen in normal operation).
+
+        The background path adds two safety guarantees over a naive
+        ``create_task``:
+
+        1. **Per-session serialisation** — the daily memory file is updated
+           with a non-atomic read-modify-write, so two overlapping flushes
+           for the same session would race.  We acquire a per-session
+           ``asyncio.Lock`` so a second compaction's flush is queued behind
+           the first.  Different sessions remain fully parallel.
+        2. **Hard timeout** — wraps the flush in ``asyncio.wait_for`` so a
+           stuck provider call cannot indefinitely retain ``chat_messages``
+           / provider references.  Tunable via
+           ``FLOCKS_COMPACTION_FLUSH_TIMEOUT`` (default 600s).
         """
         kwargs = dict(
             session_id=session_id,
@@ -214,23 +308,43 @@ class SessionCompaction:
             await cls._flush_memory_to_daily(**kwargs)
             return
 
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
+        timeout_s = _flush_timeout_seconds()
 
-        if loop is None:
-            await cls._flush_memory_to_daily(**kwargs)
-            return
+        async def _runner() -> None:
+            lock = _get_flush_lock(session_id)
+            wait_started = time.perf_counter()
+            async with lock:
+                wait_ms = (time.perf_counter() - wait_started) * 1000.0
+                run_started = time.perf_counter()
+                try:
+                    await asyncio.wait_for(
+                        cls._flush_memory_to_daily(**kwargs),
+                        timeout=timeout_s,
+                    )
+                    duration_ms = (time.perf_counter() - run_started) * 1000.0
+                    log.info("compaction.flush.background.completed", {
+                        "session_id": session_id,
+                        "wait_ms": round(wait_ms, 2),
+                        "duration_ms": round(duration_ms, 2),
+                    })
+                except asyncio.TimeoutError:
+                    duration_ms = (time.perf_counter() - run_started) * 1000.0
+                    log.error("compaction.flush.background.timeout", {
+                        "session_id": session_id,
+                        "wait_ms": round(wait_ms, 2),
+                        "duration_ms": round(duration_ms, 2),
+                        "timeout_s": timeout_s,
+                    })
 
-        flush_task = loop.create_task(
-            cls._flush_memory_to_daily(**kwargs),
-            name=f"compaction.flush.{session_id}",
+        flush_task = asyncio.create_task(
+            _runner(),
+            name=f"{_FLUSH_TASK_NAME_PREFIX}{session_id}",
         )
         _pending_flush_tasks.add(flush_task)
         flush_task.add_done_callback(_on_flush_task_done)
         log.info("compaction.flush.scheduled_background", {
             "session_id": session_id,
+            "timeout_s": timeout_s,
         })
 
     # ------------------------------------------------------------------
