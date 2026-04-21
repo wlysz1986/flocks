@@ -667,3 +667,68 @@ class TestBindEndpoint:
 
         assert resp.status_code == 404
         assert "ses_missing" in resp.json()["detail"]
+
+    def test_bind_endpoint_rejects_group_sender_composite_key(self, client, monkeypatch):
+        """group_sender mode builds peerId = `<conversationId>:<senderId>`;
+        that composite is only valid for session isolation, not as a send
+        target.  The endpoint must refuse to persist it so the bug cannot
+        regress into the bindings table.
+        """
+        from flocks.channel.inbound import session_binding as sb_mod
+
+        called = {"count": 0}
+
+        async def _unexpected_bind(self, **_):
+            called["count"] += 1
+
+        monkeypatch.setattr(
+            sb_mod.SessionBindingService, "bind_session", _unexpected_bind,
+        )
+
+        resp = client.post(
+            "/api/channel/dingtalk/bind",
+            json={
+                "session_id": "ses_42",
+                "chat_id": "cidXXXX:staff_001",  # group_sender composite
+                "chat_type": "group",
+            },
+        )
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert "composite" in body["detail"].lower()
+        # Must NOT have reached the service: the check is meant to prevent
+        # the bad row from ever being written.
+        assert called["count"] == 0
+
+    def test_bind_endpoint_accepts_colon_in_direct_targets(self, client, monkeypatch):
+        """Some platforms embed ':' in user IDs (namespacing, e.g. feishu's
+        ``user:open_id``).  The composite-key guard must only fire for
+        *group* chats, never for direct ones.
+        """
+        from flocks.channel.inbound import session_binding as sb_mod
+
+        async def fake_bind(self, **kwargs):
+            return sb_mod.SessionBinding(
+                channel_id=kwargs["channel_id"],
+                account_id=kwargs["account_id"],
+                chat_id=kwargs["chat_id"],
+                chat_type=kwargs["chat_type"],
+                thread_id=kwargs.get("thread_id"),
+                session_id=kwargs["session_id"],
+                agent_id=kwargs.get("agent_id"),
+                created_at=0.0,
+                last_message_at=0.0,
+            )
+
+        monkeypatch.setattr(sb_mod.SessionBindingService, "bind_session", fake_bind)
+
+        resp = client.post(
+            "/api/channel/dingtalk/bind",
+            json={
+                "session_id": "ses_42",
+                "chat_id": "user:staff_001",
+                "chat_type": "direct",
+            },
+        )
+        assert resp.status_code == 200, resp.text

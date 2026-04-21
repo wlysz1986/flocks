@@ -85,19 +85,54 @@ function buildSessionTitle(sessionKey: string): string {
  * does for Feishu / WeCom / Telegram — DingTalk creates its session
  * out-of-process, so we have to register the binding explicitly.
  *
- * Best-effort: a failure here only means the channel_message tool will
- * 404 for this session, the inbound reply path keeps working.
+ * IMPORTANT — chat_id resolution for groups:
+ *   plugin.ts builds `peerId` differently depending on groupSessionScope:
+ *     - `group` (default): peerId = conversationId              (routable)
+ *     - `group_sender`:    peerId = `${conversationId}:${senderId}`
+ *       A SESSION-ISOLATION composite, NOT a send target — OAPI expects the
+ *       bare `openConversationId`.
+ *   So for groups we must take `info.conversationId` and never fall back to
+ *   `peerId`.  `peerId` continues to drive session isolation on the
+ *   sessionKey side; the binding row only stores the outbound-routable id.
+ *
+ *   For direct chats peerId == senderId == staffId, which is the correct
+ *   user target for `/v1.0/robot/oToMessages/batchSend`.
+ *
+ * Edge case — `separateSessionByConversation=false` + group:
+ *   The connector omits `conversationId` from the sessionKey entirely and
+ *   uses `peerId = senderId`, so there is no way to recover the
+ *   openConversationId here.  We skip binding with a warn rather than write
+ *   a record that would resolve to the wrong target.
+ *
+ * Best-effort: a failure here only means the channel_message tool will 404
+ * for this session, the inbound reply path keeps working.
  */
 async function registerChannelBinding(sessionKey: string, sessionId: string): Promise<void> {
-  let chatType = 'direct';
-  let chatId = sessionKey;
+  let chatType: 'direct' | 'group' = 'direct';
+  let chatId = '';
 
   try {
     const info = JSON.parse(sessionKey);
     chatType = info.chatType === 'group' ? 'group' : 'direct';
-    chatId = info.peerId || info.chatId || sessionKey;
+
+    if (chatType === 'group') {
+      chatId = info.conversationId || '';
+    } else {
+      chatId = info.peerId || info.senderId || '';
+    }
   } catch {
-    // sessionKey is not JSON — keep the defaults.
+    // sessionKey is not JSON (legacy plain string) — treat as an opaque
+    // direct id.
+    chatId = sessionKey;
+  }
+
+  if (!chatId) {
+    console.warn(
+      `[runner] bind skipped: no routable chat_id for sessionKey=${sessionKey} ` +
+      `(typical cause: separateSessionByConversation=false + group, where ` +
+      `the session cannot be mapped back to an openConversationId)`
+    );
+    return;
   }
 
   // The flocks-side channel_id is "dingtalk" (see ChannelMeta.id).  Other

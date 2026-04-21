@@ -225,6 +225,24 @@ async def bind_session(channel_id: str, req: BindSessionRequest):
         )
     chat_type = ChatType(req.chat_type)
 
+    # Defense-in-depth: some out-of-process bridges build composite
+    # session-isolation keys like ``<conversationId>:<senderId>`` for
+    # per-sender group sessions (e.g. DingTalk's ``groupSessionScope=
+    # group_sender``).  Such keys are NOT valid outbound targets — they
+    # would be fed as ``openConversationId`` to the platform API and fail
+    # to deliver.  Reject them here so the bug can never regress silently
+    # into the bindings table.
+    if chat_type is ChatType.GROUP and ":" in req.chat_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid group chat_id '{req.chat_id}': contains ':', which "
+                "looks like a session-isolation composite (e.g. "
+                "'<conversationId>:<senderId>').  Pass the bare platform "
+                "conversation id (e.g. DingTalk openConversationId)."
+            ),
+        )
+
     svc = SessionBindingService()
     try:
         binding = await svc.bind_session(
