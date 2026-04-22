@@ -410,9 +410,18 @@ def _build_script_handler(cfg: dict, yaml_path: Path) -> ToolHandler:
     fn_has_var_kw = any(
         p.kind == inspect.Parameter.VAR_KEYWORD for p in fn_params.values()
     )
+    # Skip the first positional argument (always the ``ctx`` we supply
+    # ourselves) so a user-provided kwarg named ``ctx`` cannot trigger
+    # ``TypeError: got multiple values for argument 'ctx'``.
+    _param_items = list(fn_params.items())
+    if _param_items and _param_items[0][1].kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.POSITIONAL_ONLY,
+    ):
+        _param_items = _param_items[1:]
     fn_param_names = {
         name
-        for name, p in fn_params.items()
+        for name, p in _param_items
         if p.kind
         in (
             inspect.Parameter.POSITIONAL_OR_KEYWORD,

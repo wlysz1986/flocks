@@ -244,20 +244,23 @@ def _resolve_runtime_config() -> RuntimeConfig:
     raw = ConfigWriter.get_api_service_raw(SERVICE_ID)
     raw = raw if isinstance(raw, dict) else {}
 
-    host = (_resolve_ref(raw.get("host")) or os.getenv("SANGFOR_XDR_HOST") or "").strip()
-    # Tolerate users pasting the full URL (with scheme and/or trailing slash)
-    # in the WebUI ``host`` field — without this normalisation we would build
-    # ``https://https://10.0.0.1`` which silently routes to nowhere.
-    if "://" in host:
-        host = host.split("://", 1)[1]
-    host = host.strip("/").strip()
-    # The host field may also contain an inline port (``10.0.0.1:8443``).
-    inline_port: Optional[int] = None
-    if ":" in host and not host.startswith("["):
-        host_part, _, port_part = host.partition(":")
-        if port_part.isdigit():
-            host = host_part
-            inline_port = int(port_part)
+    raw_host = (_resolve_ref(raw.get("host")) or os.getenv("SANGFOR_XDR_HOST") or "").strip()
+    # Tolerate users pasting any URL form into the WebUI ``host`` field —
+    # ``10.0.0.1``, ``https://10.0.0.1``, ``https://10.0.0.1:8443/api/?x=1``
+    # all collapse to a clean scheme://host[:port] base.  Without this we
+    # produced things like ``https://https://10.0.0.1`` (double scheme) or
+    # ``https://10.0.0.1/api/api/xdr/v1/...`` (leaked path component) and
+    # every signed request silently routed to nowhere.
+    candidate = raw_host if "://" in raw_host else f"https://{raw_host}"
+    parsed_host = urlparse(candidate)
+    hostname = (parsed_host.hostname or "").strip()
+    inline_port: Optional[int] = parsed_host.port
+
+    # Preserve IPv6 literal brackets when re-assembling the URL.
+    if hostname and ":" in hostname and not hostname.startswith("["):
+        hostname_for_url = f"[{hostname}]"
+    else:
+        hostname_for_url = hostname
 
     port_raw = raw.get("port") or inline_port or DEFAULT_PORT
     try:
@@ -265,7 +268,11 @@ def _resolve_runtime_config() -> RuntimeConfig:
     except (TypeError, ValueError):
         port = DEFAULT_PORT
 
-    base_url = f"https://{host}:{port}" if port != 443 else f"https://{host}"
+    base_url = (
+        f"https://{hostname_for_url}:{port}"
+        if port != 443
+        else f"https://{hostname_for_url}"
+    )
 
     timeout_raw = raw.get("timeout", DEFAULT_TIMEOUT)
     try:
@@ -288,7 +295,7 @@ def _resolve_runtime_config() -> RuntimeConfig:
     else:
         verify_ssl = str(verify_ssl_raw).strip().lower() in {"1", "true", "yes", "on"}
 
-    if not host:
+    if not hostname:
         raise ValueError("Sangfor XDR host not configured. Set api_services.sangfor_xdr.host or SANGFOR_XDR_HOST.")
     if not auth_code:
         raise ValueError(

@@ -69,6 +69,18 @@ def handler():
         ("HTTPS://example.test", "https://example.test"),
         ("10.0.0.1:8443", "https://10.0.0.1:8443"),
         ("https://10.0.0.1:8443/", "https://10.0.0.1:8443"),
+        # Path / query / fragment must not leak into base_url; otherwise the
+        # final URL becomes ``https://10.0.0.1/api/api/xdr/v1/...`` which
+        # silently fails signing.
+        ("https://10.0.0.1/api", "https://10.0.0.1"),
+        ("https://10.0.0.1/api/", "https://10.0.0.1"),
+        ("https://10.0.0.1:8443/some/sub/path", "https://10.0.0.1:8443"),
+        ("https://10.0.0.1?x=1", "https://10.0.0.1"),
+        ("https://10.0.0.1#frag", "https://10.0.0.1"),
+        # IPv6 literal must keep its bracketed form so urls remain parseable.
+        ("https://[::1]:8443", "https://[::1]:8443"),
+        # Surrounding whitespace.
+        (" https://10.0.0.1 ", "https://10.0.0.1"),
     ],
 )
 def test_resolve_runtime_config_normalises_host(handler, raw_host, expected_base_url):
