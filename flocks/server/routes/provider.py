@@ -80,6 +80,30 @@ def _should_persist_secondary_secret(metadata: Optional[Dict[str, Any]]) -> bool
     return True
 
 
+#: Sentinel value persisted when a user saves an OpenAI-compatible / custom
+#: provider without an API key (internal LLM gateways without auth). It is
+#: passed verbatim to the OpenAI SDK so the client constructs cleanly, but
+#: should NEVER be surfaced back to the UI as the actual saved key.
+#:
+#: NOTE: This value is reserved by the system. If a real upstream service
+#: ever issues an API key whose literal value equals ``"not-needed"`` it will
+#: be masked back to ``None`` on the GET endpoint and logged with the
+#: ``"<no-auth>"`` marker. Practically this is a non-issue (no provider mints
+#: such keys), but it is documented here so downstream maintainers can change
+#: the sentinel in exactly one place if they ever need to.
+_NO_API_KEY_PLACEHOLDER = "not-needed"
+
+#: Marker used in audit logs in place of the sentinel so log readers don't
+#: confuse ``not-***eded`` (the naive 4/4 mask of the sentinel) with a real
+#: short API key.
+_NO_API_KEY_LOG_MARKER = "<no-auth>"
+
+
+def _is_placeholder_api_key(value: Optional[str]) -> bool:
+    """Whether ``value`` is the internal "no-auth" sentinel."""
+    return isinstance(value, str) and value.strip() == _NO_API_KEY_PLACEHOLDER
+
+
 def _get_inline_provider_api_key(provider_id: str) -> Optional[str]:
     """Return an inline apiKey from flocks.json when present.
 
@@ -1604,10 +1628,22 @@ async def get_provider_credentials(provider_id: str):
         if not base_url:
             base_url = secrets.get(f"{provider_id}_base_url")
 
+        # When the stored value is the no-auth sentinel, hide it from the
+        # response so the UI doesn't pre-fill the password input with the
+        # literal string "not-needed". We still report ``has_credential=True``
+        # because a credential record DOES exist; the user just chose to leave
+        # the key blank for an internal/no-auth gateway.
+        is_placeholder = _is_placeholder_api_key(api_key)
+        ui_api_key = None if is_placeholder else api_key
+
         return ProviderCredentialResponse(
             secret_id=secret_id if api_key else None,
-            api_key=api_key,
-            api_key_masked=SecretManager.mask(api_key) if api_key else None,
+            api_key=ui_api_key,
+            api_key_masked=(
+                SecretManager.mask(api_key)
+                if api_key and not is_placeholder
+                else None
+            ),
             base_url=base_url,
             has_credential=bool(api_key),
         )
@@ -1634,19 +1670,37 @@ async def set_provider_credentials(provider_id: str, request: ProviderCredential
     from flocks.provider.provider import ProviderConfig
 
     try:
-        if not request.api_key:
-            raise HTTPException(status_code=400, detail="API key required")
+        # OpenAI-compatible endpoints (e.g. internal LLM gateways without auth)
+        # and user-defined custom-* providers may legitimately have no API key.
+        # For other providers (OpenAI, Anthropic, etc.) the key is still required.
+        api_key_optional = (
+            provider_id == "openai-compatible" or provider_id.startswith("custom-")
+        )
+        effective_api_key = (request.api_key or "").strip()
+        if not effective_api_key:
+            if not api_key_optional:
+                raise HTTPException(status_code=400, detail="API key required")
+            # Persist a sentinel value so downstream OpenAI SDK clients (which
+            # require a non-empty key argument) keep working transparently.
+            # The GET endpoint masks this back to ``None`` for the UI.
+            effective_api_key = _NO_API_KEY_PLACEHOLDER
 
         secrets = get_secret_manager()
 
         # 1. Save API key to .secret.json using _llm_key convention for LLM providers
         secret_id = request.secret_id or f"{provider_id}_llm_key"
-        secrets.set(secret_id, request.api_key)
-        masked = f"{request.api_key[:4]}***{request.api_key[-4:]}" if len(request.api_key) > 8 else "***"
+        secrets.set(secret_id, effective_api_key)
+        if _is_placeholder_api_key(effective_api_key):
+            masked = _NO_API_KEY_LOG_MARKER
+        elif len(effective_api_key) > 8:
+            masked = f"{effective_api_key[:4]}***{effective_api_key[-4:]}"
+        else:
+            masked = "***"
         log.info("provider.credentials.saving", {
             "provider_id": provider_id,
             "secret_id": secret_id,
             "api_key_masked": masked,
+            "api_key_optional": api_key_optional,
             "base_url": request.base_url,
         })
 
@@ -1728,7 +1782,7 @@ async def set_provider_credentials(provider_id: str, request: ProviderCredential
             custom_settings = _get_provider_custom_settings(provider)
             provider.configure(ProviderConfig(
                 provider_id=provider_id,
-                api_key=request.api_key,
+                api_key=effective_api_key,
                 base_url=effective_base_url,
                 custom_settings=custom_settings,
             ))

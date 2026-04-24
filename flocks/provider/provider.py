@@ -296,6 +296,10 @@ class Provider:
                             ENV_API_KEY = [f"{_pid.upper().replace('-', '_')}_API_KEY"]
                             ENV_BASE_URL = f"{_pid.upper().replace('-', '_')}_BASE_URL"
                             CATALOG_ID = ""
+                            # Self-hosted gateways behind this dynamic provider may
+                            # not enforce auth; let _get_client() fall back to a
+                            # sentinel key instead of raising.
+                            ALLOW_NO_API_KEY = True
                             
                             def __init__(self):
                                 super().__init__(
@@ -310,7 +314,27 @@ class Provider:
                                             self._api_key = secret_key
                                     except Exception:
                                         pass
-                        
+                                # OpenAI-compatible gateways (vLLM, internal proxies, etc.)
+                                # may legitimately run without auth. Fall back to a
+                                # sentinel so the OpenAI SDK client still constructs.
+                                if not self._api_key:
+                                    self._api_key = "not-needed"
+
+                            def is_configured(self) -> bool:
+                                """Treat a configured base URL as sufficient — many
+                                self-hosted OpenAI-compatible endpoints don't require
+                                an API key.
+
+                                Requires an explicit ``configure()`` call (i.e.
+                                ``self._config`` populated) to avoid reporting
+                                "ready" purely from constructor defaults.
+                                """
+                                if self._config is None:
+                                    return False
+                                api_key = (self._config.api_key or "").strip()
+                                base_url = (self._config.base_url or "").strip()
+                                return bool(api_key or base_url)
+
                         provider_instance = DynamicOpenAIProvider()
                         cls.register(provider_instance)
                         log.info("provider.dynamic_loaded", {
@@ -350,6 +374,12 @@ class Provider:
                                             self._api_key = secret_key
                                     except Exception:
                                         pass
+                                # Allow no-auth gateways (consistent with the
+                                # OpenAI-compatible dynamic provider above).
+                                # ``is_configured()`` is inherited from
+                                # OpenAICompatibleProvider via CherryProvider.
+                                if not self._api_key:
+                                    self._api_key = "not-needed"
 
                         provider_instance = DynamicCherryProvider()
                         cls.register(provider_instance)

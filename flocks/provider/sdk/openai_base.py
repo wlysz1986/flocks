@@ -353,12 +353,18 @@ class OpenAIBaseProvider(BaseProvider):
         ENV_API_KEY: List of env var names for API key lookup
         ENV_BASE_URL: Env var name for base URL override
         CATALOG_ID: ID in catalog.json (for get_meta / get_model_definitions)
+        ALLOW_NO_API_KEY: When True, ``_get_client()`` falls back to a sentinel
+            placeholder key instead of raising. Use for self-hosted endpoints
+            (e.g. internal LLM gateways, vLLM behind a reverse proxy) that do
+            not enforce auth. Default False keeps SaaS providers strict.
     """
 
     DEFAULT_BASE_URL: str = ""
     ENV_API_KEY: List[str] = []
     ENV_BASE_URL: str = ""
     CATALOG_ID: str = ""
+    ALLOW_NO_API_KEY: bool = False
+    NO_API_KEY_PLACEHOLDER: str = "not-needed"
 
     def __init__(self, provider_id: str, name: str):
         super().__init__(provider_id=provider_id, name=name)
@@ -393,10 +399,15 @@ class OpenAIBaseProvider(BaseProvider):
 
             api_key = self._config.api_key if self._config else self._api_key
             if not api_key:
-                env_hint = self.ENV_API_KEY[0] if self.ENV_API_KEY else "API_KEY"
-                raise ValueError(
-                    f"{self.name} API key not configured. Set {env_hint}."
-                )
+                if self.ALLOW_NO_API_KEY:
+                    # Self-hosted / no-auth endpoint: pass a sentinel so the
+                    # OpenAI SDK still constructs a client.
+                    api_key = self.NO_API_KEY_PLACEHOLDER
+                else:
+                    env_hint = self.ENV_API_KEY[0] if self.ENV_API_KEY else "API_KEY"
+                    raise ValueError(
+                        f"{self.name} API key not configured. Set {env_hint}."
+                    )
 
             base_url = (
                 self._config.base_url
