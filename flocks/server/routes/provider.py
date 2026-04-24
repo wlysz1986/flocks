@@ -1634,19 +1634,35 @@ async def set_provider_credentials(provider_id: str, request: ProviderCredential
     from flocks.provider.provider import ProviderConfig
 
     try:
-        if not request.api_key:
-            raise HTTPException(status_code=400, detail="API key required")
+        # OpenAI-compatible endpoints (e.g. internal LLM gateways without auth)
+        # and user-defined custom-* providers may legitimately have no API key.
+        # For other providers (OpenAI, Anthropic, etc.) the key is still required.
+        api_key_optional = (
+            provider_id == "openai-compatible" or provider_id.startswith("custom-")
+        )
+        effective_api_key = (request.api_key or "").strip()
+        if not effective_api_key:
+            if not api_key_optional:
+                raise HTTPException(status_code=400, detail="API key required")
+            # Persist a sentinel value so downstream OpenAI SDK clients (which
+            # require a non-empty key argument) keep working transparently.
+            effective_api_key = "not-needed"
 
         secrets = get_secret_manager()
 
         # 1. Save API key to .secret.json using _llm_key convention for LLM providers
         secret_id = request.secret_id or f"{provider_id}_llm_key"
-        secrets.set(secret_id, request.api_key)
-        masked = f"{request.api_key[:4]}***{request.api_key[-4:]}" if len(request.api_key) > 8 else "***"
+        secrets.set(secret_id, effective_api_key)
+        masked = (
+            f"{effective_api_key[:4]}***{effective_api_key[-4:]}"
+            if len(effective_api_key) > 8
+            else "***"
+        )
         log.info("provider.credentials.saving", {
             "provider_id": provider_id,
             "secret_id": secret_id,
             "api_key_masked": masked,
+            "api_key_optional": api_key_optional,
             "base_url": request.base_url,
         })
 
@@ -1728,7 +1744,7 @@ async def set_provider_credentials(provider_id: str, request: ProviderCredential
             custom_settings = _get_provider_custom_settings(provider)
             provider.configure(ProviderConfig(
                 provider_id=provider_id,
-                api_key=request.api_key,
+                api_key=effective_api_key,
                 base_url=effective_base_url,
                 custom_settings=custom_settings,
             ))

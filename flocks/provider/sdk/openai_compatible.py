@@ -47,7 +47,27 @@ class OpenAICompatibleProvider(BaseProvider):
         self._api_key = os.getenv("OPENAI_COMPATIBLE_API_KEY", "not-needed")
         self._base_url = os.getenv("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:11434/v1")
         self._client = None
-    
+
+    def is_configured(self) -> bool:
+        """OpenAI-compatible endpoints (internal gateways, vLLM, etc.) often
+        run without auth, so a configured base URL alone is sufficient.
+
+        We deliberately do NOT call ``BaseProvider.is_configured`` because that
+        treats a missing ``api_key`` as unconfigured, which would hide perfectly
+        usable no-auth gateways from the model picker.
+
+        Note: the constructor seeds ``self._api_key`` / ``self._base_url`` with
+        env defaults (``"not-needed"`` / ``"http://localhost:11434/v1"``).  We
+        intentionally ignore those here and require an explicit ``configure()``
+        call — otherwise every fresh process would report this provider as
+        "ready" before the user actually set anything up.
+        """
+        if self._config is None:
+            return False
+        api_key = (self._config.api_key or "").strip()
+        base_url = (self._config.base_url or "").strip()
+        return bool(api_key or base_url)
+
     def _get_client(self):
         """Get or create OpenAI Compatible client"""
         if self._client is None:
