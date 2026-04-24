@@ -62,6 +62,13 @@ _PRESERVE_NAMES: set[str] = {
 log = Log.create(service="updater")
 
 
+def _record_update_journal(message: str) -> None:
+    """Append a human-readable line to ``update.log`` (see ``append_upgrade_text_log``)."""
+    from flocks.utils.log import append_upgrade_text_log
+
+    append_upgrade_text_log(message)
+
+
 @dataclass(frozen=True)
 class UpdateMirrorProfile:
     """Resolved download/runtime mirror settings for a single upgrade request."""
@@ -1903,9 +1910,11 @@ async def perform_update(
     except Exception as exc:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         log.error("updater.download.all_failed", {"error": str(exc)})
+        _dl_msg = "Failed to download the update. Please check your network connection."
+        _record_update_journal(f"ERROR {_dl_msg} ({exc})")
         yield UpdateProgress(
             stage="error",
-            message="Failed to download the update. Please check your network connection.",
+            message=_dl_msg,
             success=False,
         )
         return
@@ -1945,6 +1954,7 @@ async def perform_update(
         msg = f"Failed to extract files: {exc}"
         if backup_path:
             msg += f"\nRestore from backup: {backup_path}"
+        _record_update_journal(f"ERROR {msg}")
         yield UpdateProgress(stage="error", message=msg, success=False)
         return
 
@@ -1965,9 +1975,11 @@ async def perform_update(
             )
             if code != 0:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
+                _fe_dep = f"Frontend dependency install failed: {err}"
+                _record_update_journal(f"ERROR {_fe_dep}")
                 yield UpdateProgress(
                     stage="error",
-                    message=f"Frontend dependency install failed: {err}",
+                    message=_fe_dep,
                     success=False,
                 )
                 return
@@ -1981,9 +1993,11 @@ async def perform_update(
             )
             if code != 0:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
+                _fe_build = f"Frontend build failed: {err}"
+                _record_update_journal(f"ERROR {_fe_build}")
                 yield UpdateProgress(
                     stage="error",
-                    message=f"Frontend build failed: {err}",
+                    message=_fe_build,
                     success=False,
                 )
                 return
@@ -1997,9 +2011,11 @@ async def perform_update(
         dist_index = staged_webui_dir / "dist" / "index.html"
         if not dist_index.exists():
             shutil.rmtree(tmp_dir, ignore_errors=True)
+            _fe_miss = "Frontend build output is missing; upgrade aborted before cutover."
+            _record_update_journal(f"ERROR {_fe_miss}")
             yield UpdateProgress(
                 stage="error",
-                message="Frontend build output is missing; upgrade aborted before cutover.",
+                message=_fe_miss,
                 success=False,
             )
             return
@@ -2092,6 +2108,7 @@ async def perform_update(
         )
         if sys.platform == "win32":
             hint = "Dependency sync failed: uv is required to refresh the Windows project runtime."
+        _record_update_journal(f"ERROR {hint}")
         yield UpdateProgress(stage="error", message=hint, success=False)
         return
 
@@ -2203,7 +2220,7 @@ async def perform_update(
             handover_active = False
         yield UpdateProgress(
             stage="error",
-            message=f"Failed to build restart command: {exc}",
+            message=_rb_msg,
             success=False,
         )
         return
@@ -2234,7 +2251,7 @@ async def perform_update(
                 handover_active = False
             yield UpdateProgress(
                 stage="error",
-                message=f"Failed to restart service: {exc}",
+                message=_rs_win,
                 success=False,
             )
             return
@@ -2252,7 +2269,7 @@ async def perform_update(
             handover_active = False
         yield UpdateProgress(
             stage="error",
-            message=f"Failed to restart service: {exc}",
+            message=_rs_unix,
             success=False,
         )
         return
